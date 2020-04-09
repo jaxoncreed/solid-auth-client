@@ -7,7 +7,7 @@ import { toUrlString, currentUrlNoParams } from './url-util'
 import type { AsyncStorage } from './storage'
 import type { Session } from './session'
 // $FlowFixMe
-import { customAuthFetcher } from '../../../solid-auth-fetcher/dist/index'
+import { customAuthFetcher } from '../../solid-auth-fetcher/dist/index'
 
 export type loginOptions = {
   callbackUri: string,
