@@ -24,18 +24,13 @@ export default class AuthButtons extends React.Component<Object, Object> {
       'http://localhost:8080'
     )
     if (idp) {
-      auth.login(idp, {
-        // TODO: remove this this is only here because some IDPs are not spec compliant
-        clientName: 'coolApp'
-      })
+      auth.login(idp, {})
     }
   }
 
   popupLogin() {
     auth.popupLogin({
-      popupUri,
-      // TODO: remove this this is only here because some IDPs are not spec compliant
-      clientName: 'coolApp'
+      popupUri
     })
   }
 
