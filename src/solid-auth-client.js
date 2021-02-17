@@ -1,17 +1,13 @@
+import {
+  getClientAuthenticationWithDependencies,
+  Session
+} from '@inrupt/solid-client-authn-browser'
 // @flow
-/* global fetch */
 import EventEmitter from 'events'
-import { authnFetch } from './authn-fetch'
 import { openIdpPopup, obtainSession } from './popup'
-import type { Session } from './session'
-import { getSession, saveSession, clearSession } from './session'
-import type { AsyncStorage } from './storage'
+
 import { defaultStorage } from './storage'
 import { toUrlString, currentUrlNoParams } from './url-util'
-import * as WebIdOidc from './webid-oidc'
-
-// Store the global fetch, so the user is free to override it
-const globalFetch = fetch
 
 export type loginOptions = {
   callbackUri: string,
@@ -23,16 +19,56 @@ export type loginOptions = {
 }
 
 export default class SolidAuthClient extends EventEmitter {
-  _pendingSession: ?Promise<?Session>
+  async getAuthFetcher(storage) {
+    let clientAuthentication
+    if (storage) {
+      const asyncStorage = storage
 
-  fetch(input: RequestInfo, options?: RequestOptions): Promise<Response> {
-    this.emit('request', toUrlString(input))
-    return authnFetch(defaultStorage(), globalFetch, input, options)
+      clientAuthentication = getClientAuthenticationWithDependencies({
+        secureStorage: {
+          get: key => asyncStorage.getItem(key),
+          set: (key, value) => asyncStorage.setItem(key, value),
+          delete: key => asyncStorage.removeItem(key)
+        }
+      })
+    } else {
+      clientAuthentication = getClientAuthenticationWithDependencies({})
+    }
+    return new Session(
+      {
+        clientAuthentication
+      },
+      'default'
+    )
   }
 
-  login(idp: string, options: loginOptions): Promise<?Session> {
+  async handleIncomingRedirect(storage?: AsyncStorage) {
+    const authFetcher = await this.getAuthFetcher(storage || defaultStorage())
+
+    const authCode =
+      new URL(window.location.href).searchParams.get('code') ||
+      // FIXME: Temporarily handle both autch code and implicit flow.
+      // Should be either removved or refactored.
+      new URL(window.location.href).searchParams.get('access_token')
+    if (authCode) {
+      await authFetcher.handleIncomingRedirect(new URL(window.location.href))
+    }
+  }
+
+  async fetch(input: RequestInfo, options?: RequestOptions): Promise<Response> {
+    const authFetcher = await this.getAuthFetcher()
+    this.emit('request', toUrlString(input))
+    // @ts-ignore TODO: reconcile the input type
+    return authFetcher.fetch(input, options)
+  }
+
+  async login(idp: string, options: loginOptions): Promise<?Session> {
     options = { ...defaultLoginOptions(currentUrlNoParams()), ...options }
-    return WebIdOidc.login(idp, options)
+    const authFetcher = await this.getAuthFetcher(options.storage)
+    await authFetcher.login({
+      redirectUrl: options.callbackUri,
+      oidcIssuer: idp
+    })
   }
 
   async popupLogin(options: loginOptions): Promise<?Session> {
@@ -40,7 +76,7 @@ export default class SolidAuthClient extends EventEmitter {
     if (!/https?:/.test(options.popupUri)) {
       options.popupUri = new URL(
         options.popupUri || '/.well-known/solid/login',
-        window.location
+        window.location.href
       ).toString()
     }
     if (!options.callbackUri) {
@@ -53,36 +89,24 @@ export default class SolidAuthClient extends EventEmitter {
     return session
   }
 
-  async currentSession(
-    storage: AsyncStorage = defaultStorage()
-  ): Promise<?Session> {
-    // Try to obtain a stored or pending session
-    let session = this._pendingSession || (await getSession(storage))
-
-    // If none found, attempt to create a new session
-    if (!session) {
-      // Try to create a new OIDC session from stored tokens
-      try {
-        this._pendingSession = WebIdOidc.currentSession(storage)
-        session = await this._pendingSession
-      } catch (err) {
-        console.error(err)
+  async currentSession(storage?: AsyncStorage): Promise<?Session> {
+    await this.handleIncomingRedirect(storage || defaultStorage())
+    const authFetcher = await this.getAuthFetcher(storage || defaultStorage())
+    if (authFetcher.info.isLoggedIn) {
+      return {
+        webId: authFetcher.info.webId,
+        sessionKey: authFetcher.info.sessionId
       }
-
-      // Save the new session and emit session events
-      if (session) {
-        await saveSession(storage)(session)
-        this.emit('login', session)
-        this.emit('session', session)
-      }
-      delete this._pendingSession
     }
-    return session
+    return null
   }
 
-  async trackSession(callback: Function): Promise<void> {
+  async trackSession(
+    callback: Function,
+    storage?: AsyncStorage
+  ): Promise<void> {
     /* eslint-disable standard/no-callback-literal */
-    callback(await this.currentSession())
+    callback(await this.currentSession(storage || defaultStorage()))
     this.on('session', callback)
   }
 
@@ -90,18 +114,17 @@ export default class SolidAuthClient extends EventEmitter {
     this.removeListener('session', callback)
   }
 
-  async logout(storage: AsyncStorage = defaultStorage()): Promise<void> {
-    const session = await getSession(storage)
-    if (session) {
+  async logout(storage?: AsyncStorage): Promise<void> {
+    const authFetcher = await this.getAuthFetcher(storage || defaultStorage())
+    if (authFetcher.info.isLoggedIn) {
       try {
-        await WebIdOidc.logout(storage, globalFetch)
+        await authFetcher.logout()
         this.emit('logout')
         this.emit('session', null)
       } catch (err) {
         console.warn('Error logging out:')
         console.error(err)
       }
-      await clearSession(storage)
     }
   }
 }

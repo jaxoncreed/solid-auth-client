@@ -6,7 +6,6 @@ import nock from 'nock'
 import rsaPemToJwk from 'rsa-pem-to-jwk'
 
 import SolidAuthClient from '../solid-auth-client'
-import { saveHost } from '../host'
 import { getSession, saveSession } from '../session'
 import { polyfillWindow, polyunfillWindow } from './spec-helpers'
 import { asyncStorage } from '../storage'
@@ -730,11 +729,6 @@ describe('fetch', () => {
     it('just sends one request to domains it has already encountered', async () => {
       expect.assertions(1)
       await saveSession(window.localStorage)(fakeSession)
-
-      await saveHost(window.localStorage)({
-        url: 'third-party.com',
-        requiresAuth: true
-      })
 
       nock('https://third-party.com')
         .get('/resource')
